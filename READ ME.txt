@@ -1,0 +1,34 @@
+## Overview
+This program uses Open AI's Whisper models for speech to text and Huggingface pipeline translator models for translation to generate subtitles on an input video. Whisper and Huggingface pipeline both support dozens of languages, you should be able to input a video in any supported language and generate subtitles for it in any other supported language. There are options to generate subtitle files or create a new video with translated subtitles burned in. 
+
+
+## Installation
+1. Download and unzip FFmpeg (https://www.gyan.dev/ffmpeg/builds/) and add it to PATH. Record installation location.
+2. Paste path of ffmpeg.exe in translated_subtitler.py parameter FFMPEG_PATH.
+3. Download and install python 3.11. Add it to Path. The required Tensorflow version doesn't work on other versions. https://www.python.org/downloads/release/python-3118/ 
+3. Install the library versions in rquirements.txt in listed order. There may be  warnings about numpy and typing-extensions not being compatable, use the versions in requirements.txt and it will work.
+4. If using an Nvidia GPU, you should update the drivers.
+
+
+## Instructions
+Open translated_subtitler.py in any IDE. There are a number of parameters at the top of the file The first is the filename, including extension, of the target file. This video file should be placed in the same folder as translated_subtitler.py.
+
+Use the language codes to set the original and target languages. You may need to research the best Huggingface pipeline model for your language pair.
+
+translated_subtitler.py runs the file in INPUT_FILENAME. batch_translator.py can be used to run on multiple videos sequentially as long as they all have the same settings. When running batch_translator.py, INPUT_FILENAME is ignored on translated_subtitler.py.
+
+## Program Flow
+Extract audio from video -> Pre-Process audio emphasizing speech -> Transcribe in original language with Whisper -> Translate to target Language using Huggingface pipeline -> Create subtitle file -> Optional: Burn into video
+
+## Notes
+When running a Huggingface or Whisper model for the first time, it will download the model. These can be up to 3 GB each.
+
+There are parameters for chunking, but non-chunked yields best results. Just set the chunk time greater than the video time to turn it off.
+
+Only setup to use Nvidia GPUs. GPU recommended. Using CPU is still viable, just slower.
+
+Whisper Large-v3 requires 10 GB of VRAM. Try turbo if you have less than 10 GB RAN.
+
+Using python 3.11.8 and FFmpeg 7.1.1. Library versions are in requirements.txt
+
+It works as well as the models do. Some languages will have better results than others.
