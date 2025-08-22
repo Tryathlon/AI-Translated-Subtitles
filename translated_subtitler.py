@@ -145,17 +145,27 @@ def transcribe_audio(audio_path, device, model_size):
                 chunk_path
             ], check=True)
             
+
+
+            result = model.transcribe(
+                chunk_path,
+                language=SPEECH_LANGUAGE,
+                temperature=TEMP,  
+                initial_prompt="Clear dialogue without repetitions. Proper punctuation.",
+                condition_on_previous_text=False  # Prevent repetition carryover
+            )
+            
             # Transcribe with initial prompt to discourage repetitions
             result = model.transcribe(
                 chunk_path,
                 language=SPEECH_LANGUAGE,
                 temperature=TEMP,  
                 initial_prompt="Clear dialogue without repetitions. Proper punctuation.",
-                carry_initial_prompt=True,             #Apply throughout, False is only first 30 seconds
-                condition_on_previous_text=True,      # carryover previous transcription as context?
-                compression_ratio_threshold=2.4,      # Lower is stricter declaring hallucinations
-                logprob_threshold=-0.7,               # Close to 0 is stricter generation confidence
-                no_speech_threshold=0.5              # Lower is more strict for declaring silence
+                #carry_initial_prompt=True,             #Apply throughout, False is only first 30 seconds
+                condition_on_previous_text=False,      # carryover previous transcription as context?
+                #compression_ratio_threshold=2.4,      # Lower is stricter declaring hallucinations
+                #logprob_threshold=-0.7,               # Close to 0 is stricter generation confidence
+                #no_speech_threshold=0.5              # Lower is more strict for declaring silence
             )
             
             # Process segments with duplicate detection
