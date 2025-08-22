@@ -1,10 +1,10 @@
-#This file will take in a Video and will create translated subtitles based on language settings.
+#This file will take in a Video and will create translated subtitles.
 # ====== PARAMETERS =========================================================================================================== #
 INPUT_FILENAME = "test.mp4"                             # Input video file
 
 #Select at least one Action
-BURN_INTO_VIDEO = True                                  # Create a new video file with subtitles burned in
-SAVE_ASS_FILE = False                                   # Save the .ass subtitle file
+BURN_INTO_VIDEO = False                                 # Create a new video file with subtitles burned in
+SAVE_ASS_FILE = True                                    # Save the .ass subtitle file
 SAVE_SRT_FILE = True                                    # Save the .srt subtitle file
 PRINT_TRANSCRIPT = False                                # Print translated transcript to console
 
@@ -18,18 +18,20 @@ SUBTITLE_MARGIN_BOTTOM = 50                             # Space from bottom in p
 SPEECH_LANGUAGE = 'ja'                                  # Code for the language the video is in. Options: en(English), ja(Japanese), es(Spanish), zh(Chinese), fr(French), de(German), etc.
 SUBTITLE_LANGUAGE = 'en'                                # Subtitle language code, same code options as above
 TRANSLATOR_MODEL = "Helsinki-NLP/opus-mt-ja-en"         # Huggingface Translator Model. Language pair specific, search for the best one: https://huggingface.co/models?pipeline_tag=translation&sort=downloads
-                                                        # Spanish to English: Helsinki-NLP/opus-mt-es-en      Japanese to English: Helsinki-NLP/opus-mt-ja-en     Chinese to English: Helsinki-NLP/opus-mt-zh-en
-
-#Technical
+                                                        # Spanish to English: Helsinki-NLP/opus-mt-es-en      Japanese to English: Helsinki-NLP/opus-mt-ja-en      Chinese to English: Helsinki-NLP/opus-mt-zh-en
+#Whisper
 WHISPER_MODEL = "large-v3"                              #The whisper model to use for speech to text. Options: "large-v3"  "turbo" "medium" "small"
-USE_GPU = True                                          # Set False to use CPU
-TEMP = 0.08                                             # Transcription temperature, reccomend close to 0 but not 0
+PRELOAD_WHISPER = True                                  # Preload whisper. Faster if you have enough RAM
+TEMP = 0.05                                             # Transcription temperature, reccomend close to 0 but not 0
 CHUNK_SIZE = 300 * 60                                   # Chunk Size in seconds
 OVERLAP = 0                                             # Chunk overlap in seconds, for not splitting phrases at the end of the chunk
 PREROLL = 0                                             # Chunk pre-roll is seconds, for not splitting phrases at the beginning of the chunk
-MAX_LENGTH = 120                                        # Max charactor length of a subtitle
-MAX_DURATION = 4                                        # Max subtitle duration in seconds 
-MIN_DURATION = 0.3                                      # Minimum subtitle duration in seconds
+
+#Technical
+USE_GPU = True                                          # Set False to use CPU
+MAX_LENGTH = 150                                        # Max charactor length of a subtitle
+MAX_DURATION = 5                                        # Max subtitle duration in seconds 
+MIN_DURATION = 0.5                                      # Minimum subtitle duration in seconds
 FFMPEG_PATH = r"C:\ffmpeg\ffmpeg-7.1.1-full_build\bin\ffmpeg.exe"    #Required full path of ffmpeg.exe
 # =============================================================================================================================== #
 
@@ -43,7 +45,7 @@ os.environ["PATH"] += os.pathsep + os.path.dirname(FFMPEG_PATH)
 if not os.path.exists(FFMPEG_PATH):
     raise FileNotFoundError(f"FFmpeg not found at {FFMPEG_PATH}")
 
-# Whisper Model location
+# Model locations
 WHISPER_MODEL_DIR = "./whisper_models"
 os.makedirs(WHISPER_MODEL_DIR, exist_ok=True)
 # ================================== #
@@ -97,17 +99,17 @@ def clean_text(text):
     text = ' '.join(text.split())
     return text.strip()
 
-def extract_audio(video_path, audio_path): #Create audio file from video
+def extract_audio(video_path, audio_path):
     video = VideoFileClip(video_path)
     video.audio.write_audiofile(audio_path)
     return
     
-def transcribe_audio(audio_path, device, model_size): #Create transcription of audio
+def transcribe_audio(audio_path, device, model_size):
     if not os.path.exists(audio_path):
         raise FileNotFoundError(f"Missing audio file: {os.path.abspath(audio_path)}")
 
     print(f"Loading Whisper {model_size} model...")
-    model = whisper.load_model(model_size, device=device, download_root=WHISPER_MODEL_DIR)
+    model = whisper.load_model(model_size, device=device, download_root=WHISPER_MODEL_DIR, in_memory=PRELOAD_WHISPER)
 
     try:
         # Get audio duration
@@ -126,7 +128,7 @@ def transcribe_audio(audio_path, device, model_size): #Create transcription of a
         last_text = None
         duplicate_count = 0
         
-        for start in range(0, int(duration), CHUNK_SIZE - OVERLAP): #Transcribe in chunks
+        for start in range(0, int(duration), CHUNK_SIZE - OVERLAP):
             end = min(start + CHUNK_SIZE, duration)
             chunk_path = f"{audio_path}_chunk_{start}.wav"
             print(f"Processing section: {start/60:.1f}-{end/60:.1f} min")
@@ -149,7 +151,11 @@ def transcribe_audio(audio_path, device, model_size): #Create transcription of a
                 language=SPEECH_LANGUAGE,
                 temperature=TEMP,  
                 initial_prompt="Clear dialogue without repetitions. Proper punctuation.",
-                condition_on_previous_text=False  # Prevent repetition carryover
+                carry_initial_prompt=True,             #Apply throughout, False is only first 30 seconds
+                condition_on_previous_text=True,      # carryover previous transcription as context?
+                compression_ratio_threshold=2.4,      # Lower is stricter declaring hallucinations
+                logprob_threshold=-0.7,               # Close to 0 is stricter generation confidence
+                no_speech_threshold=0.5              # Lower is more strict for declaring silence
             )
             
             # Process segments with duplicate detection
@@ -175,7 +181,8 @@ def transcribe_audio(audio_path, device, model_size): #Create transcription of a
             os.remove(chunk_path)
         if duplicate_count > 0:
             print(f"Filtered out {duplicate_count} repetitive segments")
-        return {"segments": segments} #Return transcribed results
+        
+        return {"segments": segments}
             
     finally: #Release Reourses used for Speech to text
         del model 
@@ -287,8 +294,11 @@ def translate_video(input_path): #Main Function
                 FFMPEG_PATH, "-y",
                 "-i", input_path,
                 "-vsync", "cfr",
-                "-c:v", "copy",
-                "-c:a", "copy",
+                "-c:v", "libx264",  # ← Re-encode to H.264 (MP4 compatible)
+                "-preset", "fast",  # Balance between speed and quality
+                "-crf", "23",       # Good quality (lower = better quality, 18-28 range)
+                "-c:a", "aac",      # Re-encode audio to AAC (MP4 compatible)
+                "-b:a", "128k",     # Audio bitrate
                 cfr_video
             ], check=True)
             
