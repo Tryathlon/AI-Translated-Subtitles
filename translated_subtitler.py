@@ -21,7 +21,7 @@ TRANSLATOR_MODEL = "Helsinki-NLP/opus-mt-ja-en"         # Huggingface Translator
                                                         # Spanish to English: Helsinki-NLP/opus-mt-es-en      Japanese to English: Helsinki-NLP/opus-mt-ja-en      Chinese to English: Helsinki-NLP/opus-mt-zh-en
 #Whisper
 WHISPER_MODEL = "large-v3"                              #The whisper model to use for speech to text. Options: "large-v3"  "turbo" "medium" "small"
-PRELOAD_WHISPER = True                                  # Preload whisper. Faster if you have enough RAM
+PRELOAD_WHISPER = True                                  # Preload whisper. Slightly faster if you have enough RAM
 TEMP = 0.05                                             # Transcription temperature, reccomend close to 0 but not 0
 CHUNK_SIZE = 300 * 60                                   # Chunk Size in seconds
 OVERLAP = 0                                             # Chunk overlap in seconds, for not splitting phrases at the end of the chunk
@@ -126,7 +126,6 @@ def transcribe_audio(audio_path, device, model_size):
         segments = []
         
         last_text = None
-        duplicate_count = 0
         
         for start in range(0, int(duration), CHUNK_SIZE - OVERLAP):
             end = min(start + CHUNK_SIZE, duration)
@@ -145,27 +144,17 @@ def transcribe_audio(audio_path, device, model_size):
                 chunk_path
             ], check=True)
             
-
-
-            result = model.transcribe(
-                chunk_path,
-                language=SPEECH_LANGUAGE,
-                temperature=TEMP,  
-                initial_prompt="Clear dialogue without repetitions. Proper punctuation.",
-                condition_on_previous_text=False  # Prevent repetition carryover
-            )
-            
             # Transcribe with initial prompt to discourage repetitions
             result = model.transcribe(
                 chunk_path,
                 language=SPEECH_LANGUAGE,
                 temperature=TEMP,  
                 initial_prompt="Clear dialogue without repetitions. Proper punctuation.",
-                #carry_initial_prompt=True,             #Apply throughout, False is only first 30 seconds
-                condition_on_previous_text=False,      # carryover previous transcription as context?
-                #compression_ratio_threshold=2.4,      # Lower is stricter declaring hallucinations
-                #logprob_threshold=-0.7,               # Close to 0 is stricter generation confidence
-                #no_speech_threshold=0.5              # Lower is more strict for declaring silence
+                carry_initial_prompt=False,             #Apply propmt throughout. Results are similar either way
+                condition_on_previous_text=False,      # carryover previous transcription as context? Reccomend False, True runs slower and stops translating at soe point
+                compression_ratio_threshold=4,      # Lower is stricter declaring hallucinations. 2.4 kind of combines smaller subtitles into a bigger one. 1 and 5 do nothing
+                logprob_threshold=-0.9,               # Close to 0 is stricter generation confidence
+                no_speech_threshold=0.5              # Lower is more strict for declaring silence
             )
             
             # Process segments with duplicate detection
@@ -185,15 +174,8 @@ def transcribe_audio(audio_path, device, model_size):
                         if not re.match(r'^(oh+|ah+|mm+|uh+|hm+)$', current_text):
                             segments.append(segment)
                             last_text = current_text
-                        else:
-                            duplicate_count += 1
-            
             os.remove(chunk_path)
-        if duplicate_count > 0:
-            print(f"Filtered out {duplicate_count} repetitive segments")
-        
         return {"segments": segments}
-            
     finally: #Release Reourses used for Speech to text
         del model 
         if device == "cuda":
@@ -231,65 +213,7 @@ def translate_video(input_path): #Main Function
         translator = pipeline(task=f"translation_{SPEECH_LANGUAGE}_to_{SUBTITLE_LANGUAGE}", model=TRANSLATOR_MODEL, device=0 if device == "cuda" else -1)
 
         # 4. Generate .ass file
-        print("Creating subtitles...")
-        PRIMARY_COLOUR_ASS = rgb_to_ass_bgr(SUBTITLE_COLOR, alpha=0x00) #Format colors
-        BACK_COLOUR_ASS = rgb_to_ass_bgr("000000", alpha=0x80)
-
-        with open(ass_path, "w", encoding="utf-8") as f:
-            # .ass header
-            f.write("[Script Info]\n")
-            f.write("ScriptType: v4.00+\n")
-            f.write("Collisions: Normal\n")
-            f.write("PlayResX: 1920\n")
-            f.write("PlayResY: 1080\n")
-            f.write("Timer: 100.0000\n\n")
-
-            # Styles
-            f.write("[V4+ Styles]\n")
-            f.write("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
-                    "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
-                    "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
-                    "Alignment, MarginL, MarginR, MarginV, Encoding\n")
-            
-            margin_l = 30
-            margin_r = 30
-
-            f.write(f"Style: Default,Arial,{SUBTITLE_FONT_SIZE},{PRIMARY_COLOUR_ASS},&H00000000,"
-                    f"&H00000000,{BACK_COLOUR_ASS},0,0,0,0,100,100,0,0,1,1,0,2,{margin_l},{margin_r},{SUBTITLE_MARGIN_BOTTOM},1\n\n")
-
-            # Events
-            f.write("[Events]\n")
-            f.write("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
-            
-            translations = []
-            for segment in result["segments"]: #The actual translation part
-                # Base timing
-                original_start = segment["start"]
-                original_end = segment["end"]
-                original_duration = original_end - original_start
-
-                # Set the upper and lower bounds for duration
-                adjusted_duration = min(
-                    max(MIN_DURATION, original_duration),
-                    MAX_DURATION if MAX_DURATION > 0 else float('inf')
-                )
-                adjusted_end = original_start + adjusted_duration
-
-                clean_text_output = clean_text(segment["text"]) # Handle text
-                translation = translator(clean_text_output)[0]['translation_text'] # Translate
-
-                if MAX_LENGTH > 0 and len(translation) > MAX_LENGTH: # Apply uupper charactor limit
-                    translation = translation[:MAX_LENGTH]
-
-                translations.append(translation) #Build translation list for .srt file
-
-                if PRINT_TRANSCRIPT:
-                    print(f"[{format_time(original_start)}] {translation}")
-
-                # Write to .ass file
-                start_time = format_time(original_start, ass=True)
-                end_time = format_time(adjusted_end, ass=True)
-                f.write(f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{translation}\n")
+        translations = create_ass_file(ass_path,result,translator)
 
         if SAVE_SRT_FILE:
             create_srt_file(result["segments"], translations, srt_path)
@@ -393,6 +317,70 @@ def translate_video(input_path): #Main Function
                 except Exception as e:
                     print(f"Warning: Could not delete {path}: {str(e)}")
 
+
+def create_ass_file(ass_path,result,translator):
+    print("Creating subtitles...")
+    PRIMARY_COLOUR_ASS = rgb_to_ass_bgr(SUBTITLE_COLOR, alpha=0x00) #Format colors
+    BACK_COLOUR_ASS = rgb_to_ass_bgr("000000", alpha=0x80)
+
+    with open(ass_path, "w", encoding="utf-8") as f:
+        # .ass header
+        f.write("[Script Info]\n")
+        f.write("ScriptType: v4.00+\n")
+        f.write("Collisions: Normal\n")
+        f.write("PlayResX: 1920\n")
+        f.write("PlayResY: 1080\n")
+        f.write("Timer: 100.0000\n\n")
+
+        # Styles
+        f.write("[V4+ Styles]\n")
+        f.write("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+                "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+                "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+                "Alignment, MarginL, MarginR, MarginV, Encoding\n")
+        
+        margin_l = 30
+        margin_r = 30
+
+        f.write(f"Style: Default,Arial,{SUBTITLE_FONT_SIZE},{PRIMARY_COLOUR_ASS},&H00000000,"
+                f"&H00000000,{BACK_COLOUR_ASS},0,0,0,0,100,100,0,0,1,1,0,2,{margin_l},{margin_r},{SUBTITLE_MARGIN_BOTTOM},1\n\n")
+
+        # Events
+        f.write("[Events]\n")
+        f.write("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
+        
+        translations = []
+        for segment in result["segments"]: #The actual translation part
+            # Base timing
+            original_start = segment["start"]
+            original_end = segment["end"]
+            original_duration = original_end - original_start
+
+            # Set the upper and lower bounds for duration
+            adjusted_duration = min(
+                max(MIN_DURATION, original_duration),
+                MAX_DURATION if MAX_DURATION > 0 else float('inf')
+            )
+            adjusted_end = original_start + adjusted_duration
+
+            clean_text_output = clean_text(segment["text"]) # Handle text
+            translation = translator(clean_text_output)[0]['translation_text'] # Translate
+
+            if MAX_LENGTH > 0 and len(translation) > MAX_LENGTH: # Apply uupper charactor limit
+                translation = translation[:MAX_LENGTH]
+
+            translations.append(translation) #Build translation list for .srt file
+
+            if PRINT_TRANSCRIPT:
+                print(f"[{format_time(original_start)}] {translation}")
+
+            # Write to .ass file
+            start_time = format_time(original_start, ass=True)
+            end_time = format_time(adjusted_end, ass=True)
+            f.write(f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{translation}\n")
+    return translations
+
+    
 def get_gpu_encoder():
     #Detect available GPU encoder with fallback to CPU
     if not USE_GPU:

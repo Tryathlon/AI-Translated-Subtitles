@@ -27,7 +27,7 @@ There are parameters for chunking, but non-chunked yields best results. Just set
 
 Only setup to use Nvidia GPUs. GPU recommended. Using CPU is still viable, just slower.
 
-Whisper Large-v3 requires 10 GB of VRAM. Try turbo if you have less than 10 GB RAN.
+Whisper Large-v3 requires 10 GB of VRAM. Try turbo if you have less than 10 GB RAM.
 
 Using python 3.11.8 and FFmpeg 7.1.1. Library versions are in requirements.txt
 
